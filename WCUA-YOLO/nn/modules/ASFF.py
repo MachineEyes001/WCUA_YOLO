@@ -35,13 +35,10 @@ class Conv(nn.Module):
 
 
 class DFL(nn.Module):
-    """
-    Integral module of Distribution Focal Loss (DFL).
-    Proposed in Generalized Focal Loss https://ieeexplore.ieee.org/document/9792391
-    """
+
 
     def __init__(self, c1=16):
-        """Initialize a convolutional layer with a given number of input channels."""
+
         super().__init__()
         self.conv = nn.Conv2d(c1, 1, 1, bias=False).requires_grad_(False)
         x = torch.arange(c1, dtype=torch.float)
@@ -55,5 +52,69 @@ class DFL(nn.Module):
         # return self.conv(x.view(b, self.c1, 4, a).softmax(1)).view(b, 4, a)
 
 
+class Detect_ASFF(nn.Module):
+    def __init__(self, level, multiplier=1, rfb=False, vis=False, act_cfg=True):
+
+
+        super(Detect_ASFF, self).__init__()
+        self.level = level
+        self.dim = [int(1024 * multiplier), int(512 * multiplier),
+                    int(256 * multiplier)]
+        # print(self.dim)
+
+        self.inter_dim = self.dim[self.level]
+        if level == 0:
+            self.stride_level_1 = Conv(int(512 * multiplier), self.inter_dim, 3, 2)
+
+            self.stride_level_2 = Conv(int(256 * multiplier), self.inter_dim, 3, 2)
+
+            self.expand = Conv(self.inter_dim, int(
+                1024 * multiplier), 3, 1)
+        elif level == 1:
+            self.compress_level_0 = Conv(
+                int(1024 * multiplier), self.inter_dim, 1, 1)
+            self.stride_level_2 = Conv(
+                int(256 * multiplier), self.inter_dim, 3, 2)
+            self.expand = Conv(self.inter_dim, int(512 * multiplier), 3, 1)
+        elif level == 2:
+            self.compress_level_0 = Conv(
+                int(1024 * multiplier), self.inter_dim, 1, 1)
+            self.compress_level_1 = Conv(
+                int(512 * multiplier), self.inter_dim, 1, 1)
+            self.expand = Conv(self.inter_dim, int(
+                256 * multiplier), 3, 1)
+
+    def bias_init(self):
+        """Initialize Detect() biases, WARNING: requires stride availability."""
+        m = self  # self.model[-1]  # Detect() module
+        # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1
+        # ncf = math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # nominal class frequency
+        for a, b, s in zip(m.cv2, m.cv3, m.stride):  # from
+            a[-1].bias.data[:] = 1.0  # box
+            b[-1].bias.data[:m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+
+
+
+    def forward(self, x):  # l,m,s
+
+        x_level_0 = x[2]  # l
+        x_level_1 = x[1]  # m
+        x_level_2 = x[0]  # s
+        # print('x_level_0: ', x_level_0.shape)
+        # print('x_level_1: ', x_level_1.shape)
+        # print('x_level_2: ', x_level_2.shape)
+        if self.level == 0:
+            level_0_resized = x_level_0
+            level_1_resized = self.stride_level_1(x_level_1)
+            level_2_downsampled_inter = F.max_pool2d(
+                x_level_2, 3, stride=2, padding=1)
+            level_2_resized = self.stride_level_2(level_2_downsampled_inter)
+        elif self.level == 1:
+            level_0_compressed = self.compress_level_0(x_level_0)
+            level_0_resized = F.interpolate(
+                level_0_compressed, scale_factor=2, mode='nearest')
+            level_1_resized = x_level_1
+
+            return x
 
 
